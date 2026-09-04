@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>The Backrooms &mdash; Mapped Sectors</title>
+<meta name="description" content="A fully playable 3D recreation of a mapped Backrooms sector, with VHS found-footage mode." />
+<link rel="icon" href="data:,">
+<style>
+  :root{
+    color-scheme: dark;
+    --accent:#d8c98a;
+    --accent-dim:#8a7f56;
+    --panel-bg: rgba(10,10,8,0.72);
+    --danger:#c95b3f;
+  }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:#000; overflow:hidden;
+    font-family: 'Courier New', Consolas, monospace;
+    -webkit-user-select:none; user-select:none;
+    touch-action:none;
+  }
+  #app{ position:fixed; inset:0; width:100%; height:100%; }
+  canvas#gl{ position:absolute; inset:0; display:block; width:100%; height:100%; outline:none; }
+
+  /* ---------- Loading screen ---------- */
+  #loading{
+    position:fixed; inset:0; background:#050503; color:var(--accent);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    z-index:100; transition:opacity .6s ease;
+    letter-spacing:2px;
+  }
+  #loading h1{ font-size:1.4rem; margin:0 0 18px; font-weight:400; opacity:.85; text-transform:uppercase; }
+  #loadbar-track{ width:min(420px,70vw); height:6px; background:#1c1a12; border:1px solid #3a3524; }
+  #loadbar-fill{ height:100%; width:0%; background:linear-gradient(90deg,#8a7f4a,var(--accent)); transition:width .15s ease; }
+  #loading p{ margin-top:14px; font-size:.75rem; opacity:.55; }
+  #loading.hidden{ opacity:0; pointer-events:none; }
+
+  /* ---------- HUD ---------- */
+  #hud{ position:fixed; inset:0; pointer-events:none; z-index:10; font-family:'Courier New',monospace; }
+  #crosshair{
+    position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px 0 0 -3px;
+    border-radius:50%; background:rgba(230,225,200,0.85); box-shadow:0 0 4px rgba(0,0,0,.8);
+  }
+  #interact-prompt{
+    position:absolute; top:60%; left:50%; transform:translate(-50%,0);
+    color:#f1ead0; background:rgba(0,0,0,.55); padding:6px 14px; border:1px solid rgba(216,201,138,.5);
+    font-size:.8rem; letter-spacing:1px; opacity:0; transition:opacity .15s ease; white-space:nowrap;
+  }
+  #interact-prompt.show{ opacity:1; }
+
+  #stamina-wrap{
+    position:absolute; left:20px; bottom:20px; width:160px; height:6px; background:rgba(0,0,0,.5); border:1px solid rgba(216,201,138,.35);
+  }
+  #stamina-fill{ height:100%; width:100%; background:#b7ac74; transition:width .1s linear; }
+
+  #compass{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%);
+    color:rgba(230,225,200,.75); font-size:.7rem; letter-spacing:3px; text-transform:uppercase;
+  }
+
+  #note-log{
+    position:absolute; right:18px; bottom:18px; max-width:280px; color:#e9e2c8; font-size:.72rem;
+    background:rgba(0,0,0,.4); padding:8px 10px; border-left:2px solid var(--accent-dim); opacity:0; transition:opacity .3s;
+    line-height:1.4;
+  }
+  #note-log.show{ opacity:1; }
+
+  #vhs-tag{
+    position:absolute; top:16px; right:20px; color:#ffdf7e; font-size:.75rem; letter-spacing:2px;
+    display:none; align-items:center; gap:8px;
+  }
+  #vhs-tag.on{ display:flex; }
+  #vhs-rec-dot{ width:8px; height:8px; border-radius:50%; background:#ff3b30; animation:blink 1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0; } }
+  #vhs-timestamp{ position:absolute; bottom:26px; right:24px; color:#ffe9a8; font-size:.85rem; letter-spacing:1px; display:none; font-family:'Courier New',monospace; text-shadow:0 0 2px rgba(0,0,0,.8); }
+  #vhs-timestamp.on{ display:block; }
+
+  /* ---------- Menus ---------- */
+  #menu-layer{ position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+  #menu-layer.show{ display:flex; }
+  .panel{
+    width:min(440px,92vw); background:var(--panel-bg); border:1px solid rgba(216,201,138,.3);
+    padding:26px 26px 20px; color:#efe8cf; box-shadow:0 10px 40px rgba(0,0,0,.6);
+  }
+  .panel h2{ margin:0 0 4px; font-weight:400; font-size:1.1rem; letter-spacing:3px; text-transform:uppercase; color:var(--accent); }
+  .panel .sub{ font-size:.7rem; opacity:.55; margin-bottom:18px; }
+  .row{ display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid rgba(255,255,255,.06); font-size:.82rem; }
+  .row:last-child{ border-bottom:none; }
+  .btn{
+    pointer-events:auto; cursor:pointer; background:#1c1a12; color:#e9e2c8; border:1px solid rgba(216,201,138,.4);
+    padding:9px 16px; font-family:inherit; font-size:.78rem; letter-spacing:1px; text-transform:uppercase; transition:.15s;
+  }
+  .btn:hover{ background:#2b2716; border-color:var(--accent); }
+  .btn.active{ background:#4a4222; border-color:var(--accent); color:#fff3cf; }
+  .toggle{ display:flex; gap:8px; }
+  .hint{ font-size:.68rem; opacity:.5; margin-top:16px; line-height:1.6; }
+  select, input[type=range]{ pointer-events:auto; }
+  select{ background:#1c1a12; color:#e9e2c8; border:1px solid rgba(216,201,138,.4); padding:5px 8px; font-family:inherit; }
+
+  #start-screen{
+    position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at center, #191608 0%, #030302 78%);
+    flex-direction:column; text-align:center; color:#e9e2c8;
+  }
+  #start-screen h1{ font-size:clamp(1.6rem,4vw,2.6rem); letter-spacing:6px; font-weight:400; margin:0 0 6px; color:var(--accent); text-shadow:0 0 24px rgba(216,201,138,.25); }
+  #start-screen .tag{ font-size:.78rem; opacity:.55; letter-spacing:3px; margin-bottom:34px; text-transform:uppercase; }
+  #start-screen .btn{ font-size:.95rem; padding:14px 34px; }
+  #start-screen .credits{ margin-top:26px; font-size:.62rem; opacity:.4; max-width:520px; line-height:1.7; }
+  #start-screen.hidden{ display:none; }
+
+  #pointer-lock-hint{
+    position:fixed; inset:0; z-index:40; display:none; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.5); color:#efe8cf; font-size:.9rem; letter-spacing:2px; text-transform:uppercase;
+    pointer-events:none;
+  }
+  #pointer-lock-hint.show{ display:flex; }
+
+  #mobile-controls{ position:fixed; inset:0; z-index:20; display:none; pointer-events:none; }
+  #mobile-controls.show{ display:block; }
+  .joy{ position:absolute; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.18); pointer-events:auto; }
+  #joy-move{ left:24px; bottom:24px; }
+  #joy-look{ right:24px; bottom:24px; }
+  .joy .stick{ position:absolute; width:52px; height:52px; left:34px; top:34px; border-radius:50%; background:rgba(216,201,138,.35); }
+  #jump-btn{ position:absolute; right:26px; bottom:160px; width:70px; height:70px; border-radius:50%; background:rgba(216,201,138,.2); border:1px solid rgba(216,201,138,.4); color:#efe8cf; font-size:.65rem; letter-spacing:1px; pointer-events:auto; }
+  #run-btn{ position:absolute; right:110px; bottom:160px; width:60px; height:60px; border-radius:50%; background:rgba(216,201,138,.15); border:1px solid rgba(216,201,138,.35); color:#efe8cf; font-size:.6rem; letter-spacing:1px; pointer-events:auto; }
+
+  #fps-counter{ position:absolute; left:18px; top:16px; color:rgba(216,201,138,.6); font-size:.65rem; letter-spacing:1px; display:none; }
+  #fps-counter.show{ display:block; }
+
+  @media (max-width:820px){
+    .panel{ padding:20px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+
+  <div id="loading">
+    <h1>Loading Sector Data&hellip;</h1>
+    <div id="loadbar-track"><div id="loadbar-fill"></div></div>
+    <p>Reconstructing mapped rooms from field notes</p>
+  </div>
+
+  <div id="hud">
+    <div id="compass">N</div>
+    <div id="crosshair"></div>
+    <div id="interact-prompt">Press E</div>
+    <div id="stamina-wrap"><div id="stamina-fill"></div></div>
+    <div id="note-log"></div>
+    <div id="vhs-tag" class="on"><div id="vhs-rec-dot"></div><span>REC</span></div>
+    <div id="vhs-timestamp"></div>
+    <div id="fps-counter">FPS --</div>
+  </div>
+
+  <div id="pointer-lock-hint"><span>Click to resume</span></div>
+
+  <div id="mobile-controls">
+    <div class="joy" id="joy-move"><div class="stick"></div></div>
+    <div class="joy" id="joy-look"><div class="stick"></div></div>
+    <button id="jump-btn" type="button">JUMP</button>
+    <button id="run-btn" type="button">RUN</button>
+  </div>
+
+  <div id="menu-layer">
+    <div class="panel" id="pause-panel">
+      <h2>Paused</h2>
+      <div class="sub">17 days after arrival &mdash; sector partially mapped</div>
+
+      <div class="row">
+        <span>VHS Camcorder Mode</span>
+        <button class="btn" id="vhs-toggle-btn">Off</button>
+      </div>
+      <div class="row">
+        <span>Graphics Quality</span>
+        <select id="quality-select">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="row">
+        <span>Mouse Sensitivity</span>
+        <input type="range" id="sens-slider" min="0.2" max="2.5" step="0.05" value="1" />
+      </div>
+      <div class="row">
+        <span>Field of View</span>
+        <input type="range" id="fov-slider" min="65" max="100" step="1" value="82" />
+      </div>
+      <div class="row">
+        <span>Show FPS</span>
+        <button class="btn" id="fps-toggle-btn">Off</button>
+      </div>
+
+      <div class="hint">
+        WASD / Arrows &mdash; Move &nbsp;|&nbsp; Mouse &mdash; Look &nbsp;|&nbsp; Shift &mdash; Run<br/>
+        Space &mdash; Jump &nbsp;|&nbsp; E &mdash; Interact &nbsp;|&nbsp; M &mdash; Map &nbsp;|&nbsp; V &mdash; VHS Mode &nbsp;|&nbsp; Esc &mdash; Pause
+      </div>
+      <div class="row" style="margin-top:14px; border-top:1px solid rgba(255,255,255,.08); padding-top:16px;">
+        <button class="btn" id="resume-btn" style="flex:1;">Resume</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="start-screen">
+    <h1>THE BACKROOMS</h1>
+    <div class="tag">Mapped Sector &middot; 71 Days After Arrival</div>
+    <button class="btn" id="start-btn">Enter</button>
+    <div class="credits">Click Enter, then click the screen to lock your mouse look. Explore the mapped corridors,
+      find the noclip-yellow glow of the fluorescent panels, and flip on VHS Camcorder Mode (V) for a found-footage recording effect.</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

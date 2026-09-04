@@ -1,0 +1,12 @@
+{
+  "name": "backrooms-map-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Offline pipeline that converts the reference blueprint image into the game's runtime map data.",
+  "scripts": {
+    "build": "node build_map.js"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
+  }
+}
