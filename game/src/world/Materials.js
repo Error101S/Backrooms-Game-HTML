@@ -67,11 +67,13 @@ export const TextureSets = {
 };
 
 // Zone tints applied on top of the base wallpaper/carpet to echo the reference
-// blueprint's color-coded rooms (pink office, blue flooded area, green carpet room, gray concrete).
+// blueprint's color-coded rooms (pink office, tiled area, green carpet room, gray concrete).
+// Zone 2 ("blue" on the map) renders as a plain dry tiled floor (pool_tiles texture, see
+// createPoolMaterial) rather than water -- this game has no water/flooded areas.
 export const ZoneTints = {
   0: { carpet: 0xffffff, wall: 0xffffff },        // tan / default
   1: { carpet: 0xf3c9c2, wall: 0xf1d3cd },        // dusty rose office
-  2: { carpet: 0x8fb9d6, wall: 0xffffff },        // flooded / water (carpet barely visible under water)
+  2: { carpet: 0x8fb9d6, wall: 0xffffff },        // tiled area (wall tint only; floor uses pool tile material)
   3: { carpet: 0xafe0b0, wall: 0xd9f0da },        // green carpet room
   4: { carpet: 0xc9cdd3, wall: 0xd7dade },        // gray concrete area
 };
@@ -115,14 +117,4 @@ export function createPoolMaterial(width, depth) {
   const set = TextureSets.pool;
   const repeat = new THREE.Vector2(Math.max(0.5, width / set.metersPerTile), Math.max(0.5, depth / set.metersPerTile));
   return makeMaterial(set, { repeat, roughnessMul: 0.6, extra: { metalness: 0.05 } });
-}
-
-export function createWaterMaterial() {
-  return new THREE.MeshStandardMaterial({
-    color: 0x3c6f86,
-    transparent: true,
-    opacity: 0.72,
-    roughness: 0.15,
-    metalness: 0.1,
-  });
 }

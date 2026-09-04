@@ -83,18 +83,29 @@ export class GeometryBatcher {
   }
 
   // Convenience: a thin wall box between two grid-aligned faces (adds both faces + top cap).
+  //
+  // The box's *span* (z0..z1 here) is extended by half the wall thickness at each end before
+  // building geometry. Wall segments from the map data meet exactly at their shared endpoint
+  // (e.g. a vertical wall's z1 equals a horizontal wall's z), but each wall's own thickness box
+  // only covers its own span -- the small square where the two walls' thickness boxes should
+  // overlap (the outer corner "notch") is left uncovered by either one, producing a visible
+  // gap/see-through hole at every L/T-shaped corner in the map. Extending each wall's span by
+  // its own half-thickness on both ends makes every wall's footprint reach past the shared
+  // corner point and into the neighboring wall's footprint, fully sealing the joint.
   addWallBoxV(x, z0, z1, y0, y1, thickness, tileSize) {
     const half = thickness / 2;
-    this.addVerticalQuadZ(x - half, z0, z1, y0, y1, tileSize, -1);
-    this.addVerticalQuadZ(x + half, z0, z1, y0, y1, tileSize, 1);
-    this.addHorizontalQuad(x - half, z0, x + half, z1, y1, tileSize, true);
+    const ez0 = z0 - half, ez1 = z1 + half;
+    this.addVerticalQuadZ(x - half, ez0, ez1, y0, y1, tileSize, -1);
+    this.addVerticalQuadZ(x + half, ez0, ez1, y0, y1, tileSize, 1);
+    this.addHorizontalQuad(x - half, ez0, x + half, ez1, y1, tileSize, true);
   }
 
   addWallBoxH(z, x0, x1, y0, y1, thickness, tileSize) {
     const half = thickness / 2;
-    this.addVerticalQuadX(x0, x1, z - half, y0, y1, tileSize, -1);
-    this.addVerticalQuadX(x0, x1, z + half, y0, y1, tileSize, 1);
-    this.addHorizontalQuad(x0, z - half, x1, z + half, y1, tileSize, true);
+    const ex0 = x0 - half, ex1 = x1 + half;
+    this.addVerticalQuadX(ex0, ex1, z - half, y0, y1, tileSize, -1);
+    this.addVerticalQuadX(ex0, ex1, z + half, y0, y1, tileSize, 1);
+    this.addHorizontalQuad(ex0, z - half, ex1, z + half, y1, tileSize, true);
   }
 
   isEmpty() {

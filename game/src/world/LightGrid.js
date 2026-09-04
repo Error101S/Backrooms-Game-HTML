@@ -37,9 +37,13 @@ export class LightGrid {
     const geo = new THREE.PlaneGeometry(PANEL_SIZE, PANEL_SIZE);
     geo.rotateX(Math.PI / 2);
     // Bright, unlit white plane standing in for the fluorescent diffuser lens. toneMapped:false
-    // plus vertexColors let us push individual panels well past 1.0 for a believable glow while
-    // keeping the whole grid to a single draw call.
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, vertexColors: true });
+    // lets us push individual panels well past 1.0 for a believable glow while keeping the whole
+    // grid to a single draw call. IMPORTANT: do NOT set vertexColors:true here -- that flag makes
+    // three.js expect a per-vertex `color` BufferAttribute on the geometry (there isn't one), which
+    // multiplies every pixel by (0,0,0) and renders the panels pure black. Per-instance color from
+    // InstancedMesh.setColorAt() is wired in automatically via the separate USE_INSTANCING_COLOR
+    // shader path and needs no material flag at all.
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
 
     const inst = new THREE.InstancedMesh(geo, mat, count);
     inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

@@ -36,10 +36,14 @@ Touch devices get on-screen dual joysticks, jump/run buttons, and swipe-to-look 
 
 `tools/build_map.js` (see the repo root) rasterizes the reference blueprint image, classifies
 every pixel as inside/outside a room and by color-coded zone (tan hallway, pink office, blue
-flooded area, green carpet room, gray concrete area), denoises the result, decomposes it into
+tiled area, green carpet room, gray concrete area), denoises the result, decomposes it into
 axis-aligned floor/ceiling rectangles and merged wall runs, and scatters ceiling light fixtures —
 all in the blueprint's exact relative proportions. That output is `game/assets/map/runtime_map.json`,
 loaded at runtime by `src/world/MapData.js`. Re-run the tool any time the source image changes.
+
+This is a plain, dry Backrooms — there is no water anywhere. The map's blue-coded zone renders
+as a normal (dry) tiled floor using the `pool_tiles` PBR texture set purely as a flooring pattern,
+not an actual pool/water feature.
 
 ## Architecture
 
@@ -55,19 +59,41 @@ src/
 ```
 
 All ~300 mapped rooms are merged into a small, fixed number of draw calls per material (floors,
-ceilings, walls, baseboards, water, light panels) via `world/GeometryBatcher.js`, so the whole
-level renders in well under 30 draw calls regardless of its size.
+ceilings, walls, baseboards, light panels) via `world/GeometryBatcher.js`, so the whole
+level renders in well under 30 draw calls regardless of its size. Wall segments are extended by
+half their thickness at both ends before building geometry so that L/T corners fully seal (no
+see-through gaps where two wall runs meet).
+
+Ceiling light panels are lit via `InstancedMesh.setColorAt()` per-instance color, without setting
+`vertexColors: true` on the shared material — that flag makes three.js require an actual
+per-vertex `color` BufferAttribute on the geometry, and since none exists here it silently
+multiplies every panel's color by black. Bloom (`UnrealBloomPass`, medium/high quality) and a
+small pool of real `THREE.PointLight`s re-homed to the nearest fixtures each frame (see
+`world/LightGrid.js`) provide the actual illumination and glow.
+
+### Lens flares & bloom
+
+`fx/LensFlares.js` attaches a small pool of `Lensflare` objects (three.js's built-in
+screen-space-occluded flare/ghost object, from `vendor/three/examples/jsm/objects/Lensflare.js`)
+to the ceiling fixtures currently lit by `LightGrid`'s point-light pool, so flares track whichever
+lights are nearest the player and are naturally occluded by walls. `fx/PostFX.js` runs an
+`UnrealBloomPass` after the base render (enabled on Medium/High quality) so the lit panels
+actually glow instead of just being flat bright quads.
 
 ### VHS Camcorder Mode
 
-Toggle with `V` or the pause menu. It:
-- picks a random in-fiction recording date between **1972 and 1997** and ticks a camcorder-style
-  timestamp overlay,
-- applies a fisheye/barrel lens warp,
-- pushes bright fluorescent whites toward a warm tape-yellow (the level's actual lights stay
-  plain white — the yellow is purely a tape-stock color response, exactly like the reference
-  found-footage clip),
-- adds scanlines, interlace flicker, chroma smear, grain, and occasional dropout streaks.
+Toggle with `V` or the pause menu. It combines an image-degradation shader pass with a DOM
+viewfinder-HUD overlay to read as an actual camcorder recording, not just a color filter:
+- **Shader pass** (`fx/VHSShader.js`): fisheye/barrel lens warp, pushes bright fluorescent whites
+  toward a warm tape-yellow (the level's actual lights stay plain white — the yellow is purely a
+  tape-stock color response, exactly like the reference found-footage clip), scanlines, interlace
+  flicker, chroma smear, grain, and occasional dropout streaks.
+- **Viewfinder HUD** (`fx/VHSController.js` + the `#vhs-hud` overlay in `index.html`): a blinking
+  REC dot, a running `HH:MM:SS:FF` tape timecode counter (counts up from the moment VHS mode is
+  switched on), an `SP · AUTO` deck-mode tag, a slowly-draining battery gauge, viewfinder corner
+  brackets, and an in-fiction recording date/time (randomized between **1972 and 1997**) that
+  ticks forward like the OSD clock a real camcorder burns into the tape, plus an occasional
+  autofocus "hunt" bracket flash.
 
 ### Textures
 

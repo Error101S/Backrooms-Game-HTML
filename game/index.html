@@ -68,15 +68,41 @@
   }
   #note-log.show{ opacity:1; }
 
-  #vhs-tag{
-    position:absolute; top:16px; right:20px; color:#ffdf7e; font-size:.75rem; letter-spacing:2px;
-    display:none; align-items:center; gap:8px;
-  }
-  #vhs-tag.on{ display:flex; }
-  #vhs-rec-dot{ width:8px; height:8px; border-radius:50%; background:#ff3b30; animation:blink 1s steps(1) infinite; }
-  @keyframes blink{ 50%{ opacity:0; } }
-  #vhs-timestamp{ position:absolute; bottom:26px; right:24px; color:#ffe9a8; font-size:.85rem; letter-spacing:1px; display:none; font-family:'Courier New',monospace; text-shadow:0 0 2px rgba(0,0,0,.8); }
-  #vhs-timestamp.on{ display:block; }
+  /* ---------- VHS camcorder viewfinder HUD ---------- */
+  #vhs-hud{ position:absolute; inset:0; display:none; font-family:'Courier New',Consolas,monospace; color:#ffe9a8; text-shadow:0 1px 2px rgba(0,0,0,.9); }
+  #vhs-hud.on{ display:block; }
+
+  #vhs-tag{ position:absolute; top:18px; left:22px; font-size:.85rem; letter-spacing:2px; display:flex; align-items:center; gap:8px; }
+  #vhs-rec-dot{ width:9px; height:9px; border-radius:50%; background:#ff3b30; box-shadow:0 0 6px rgba(255,59,48,.9); animation:blink 1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:.15; } }
+
+  #vhs-timecode{ position:absolute; top:40px; left:22px; font-size:.72rem; letter-spacing:1px; opacity:.9; }
+
+  #vhs-mode-tag{ position:absolute; top:18px; right:22px; font-size:.72rem; letter-spacing:2px; opacity:.85; }
+
+  #vhs-battery{ position:absolute; top:40px; right:22px; font-size:.7rem; letter-spacing:1px; display:flex; align-items:center; gap:5px; opacity:.85; }
+  #vhs-battery-icon{ width:22px; height:11px; border:1px solid #ffe9a8; border-radius:2px; position:relative; padding:1px; }
+  #vhs-battery-icon::after{ content:''; position:absolute; right:-4px; top:3px; width:2px; height:5px; background:#ffe9a8; }
+  #vhs-battery-fill{ height:100%; background:#ffe9a8; width:70%; }
+
+  #vhs-timestamp{ position:absolute; bottom:28px; left:22px; font-size:.8rem; letter-spacing:1px; opacity:.95; }
+  #vhs-timestamp .date-line{ display:block; }
+  #vhs-timestamp .time-line{ display:block; font-size:.95rem; margin-top:2px; }
+
+  #vhs-corners{ position:absolute; inset:26px; pointer-events:none; }
+  #vhs-corners span{ position:absolute; width:22px; height:22px; border-color:rgba(255,233,168,.55); }
+  #vhs-corners .tl{ top:0; left:0; border-top:2px solid; border-left:2px solid; }
+  #vhs-corners .tr{ top:0; right:0; border-top:2px solid; border-right:2px solid; }
+  #vhs-corners .bl{ bottom:0; left:0; border-bottom:2px solid; border-left:2px solid; }
+  #vhs-corners .br{ bottom:0; right:0; border-bottom:2px solid; border-right:2px solid; }
+
+  #vhs-focus-brackets{ position:absolute; top:50%; left:50%; width:64px; height:64px; margin:-32px 0 0 -32px; opacity:0; transition:opacity .25s ease; }
+  #vhs-focus-brackets.show{ opacity:.8; }
+  #vhs-focus-brackets span{ position:absolute; width:14px; height:14px; border-color:#fff3cf; }
+  #vhs-focus-brackets .ftl{ top:0; left:0; border-top:2px solid; border-left:2px solid; }
+  #vhs-focus-brackets .ftr{ top:0; right:0; border-top:2px solid; border-right:2px solid; }
+  #vhs-focus-brackets .fbl{ bottom:0; left:0; border-bottom:2px solid; border-left:2px solid; }
+  #vhs-focus-brackets .fbr{ bottom:0; right:0; border-bottom:2px solid; border-right:2px solid; }
 
   /* ---------- Menus ---------- */
   #menu-layer{ position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); backdrop-filter: blur(2px); }
@@ -151,8 +177,15 @@
     <div id="interact-prompt">Press E</div>
     <div id="stamina-wrap"><div id="stamina-fill"></div></div>
     <div id="note-log"></div>
-    <div id="vhs-tag" class="on"><div id="vhs-rec-dot"></div><span>REC</span></div>
-    <div id="vhs-timestamp"></div>
+    <div id="vhs-hud">
+      <div id="vhs-tag"><div id="vhs-rec-dot"></div><span>REC</span></div>
+      <div id="vhs-timecode">00:00:00:00</div>
+      <div id="vhs-mode-tag">SP &middot; AUTO</div>
+      <div id="vhs-battery"><span id="vhs-battery-pct">70%</span><div id="vhs-battery-icon"><div id="vhs-battery-fill"></div></div></div>
+      <div id="vhs-timestamp"><span class="date-line" id="vhs-date-line"></span><span class="time-line" id="vhs-time-line"></span></div>
+      <div id="vhs-corners"><span class="tl"></span><span class="tr"></span><span class="bl"></span><span class="br"></span></div>
+      <div id="vhs-focus-brackets"><span class="ftl"></span><span class="ftr"></span><span class="fbl"></span><span class="fbr"></span></div>
+    </div>
     <div id="fps-counter">FPS --</div>
   </div>
 

@@ -8,6 +8,7 @@ import { InputManager } from '../player/InputManager.js';
 import { PlayerController } from '../player/PlayerController.js';
 import { PostFX } from '../fx/PostFX.js';
 import { VHSController } from '../fx/VHSController.js';
+import { LensFlareSystem } from '../fx/LensFlares.js';
 import { AudioSystem } from '../audio/AudioSystem.js';
 import { HUD } from '../ui/HUD.js';
 import { MenuController } from '../ui/MenuController.js';
@@ -43,8 +44,15 @@ export class Game {
     this.hud = new HUD();
     this.postFX = new PostFX(this.renderer, this.scene, this.camera, this.quality);
     this.vhs = new VHSController(this.postFX, {
+      hudEl: document.getElementById('vhs-hud'),
       tagEl: document.getElementById('vhs-tag'),
       timestampEl: document.getElementById('vhs-timestamp'),
+      dateLineEl: document.getElementById('vhs-date-line'),
+      timeLineEl: document.getElementById('vhs-time-line'),
+      timecodeEl: document.getElementById('vhs-timecode'),
+      batteryPctEl: document.getElementById('vhs-battery-pct'),
+      batteryFillEl: document.getElementById('vhs-battery-fill'),
+      focusEl: document.getElementById('vhs-focus-brackets'),
     });
     this.menu = new MenuController(this);
     this.touch = new TouchControls(this.input);
@@ -81,6 +89,7 @@ export class Game {
     this._setLoadProgress(0.55);
     this.map = mapData;
     this.world = new World(this.scene, mapData, this.qualityName);
+    this.lensFlares = new LensFlareSystem(this.scene, this.world.lightGrid, this.qualityName);
     this.interactables = new Interactables(this.scene, mapData, 22);
     this.player = new PlayerController(this.camera, mapData, this.input);
     this.miniMap = new MiniMap(mapData, this.interactables);
@@ -125,6 +134,7 @@ export class Game {
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.quality.pixelRatioCap));
     this.postFX.setQuality(this.quality);
+    if (this.lensFlares) this.lensFlares.setQuality(name);
     this.scene.fog.far = this.quality.maxDrawDistance;
     this._onResize();
   }
@@ -171,6 +181,7 @@ export class Game {
 
       this.player.update(dt);
       this.world.update(dt, elapsed, this.player.position);
+      if (this.lensFlares) this.lensFlares.update();
       this.interactables.update(dt, elapsed);
       this.vhs.update(dt);
 

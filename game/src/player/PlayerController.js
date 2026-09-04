@@ -14,7 +14,8 @@ const PLAYER_RADIUS = 0.32;
 
 // First-person controller: acceleration-based ground movement, gravity + jump,
 // capsule-vs-wall-segment collision resolved via the map's spatial hash, head bob,
-// stamina-gated sprint, and simple wading behaviour inside flooded (water) zones.
+// and stamina-gated sprint. There is no water anywhere in this game (plain Backrooms),
+// so movement/gravity are uniform in every zone.
 export class PlayerController {
   constructor(camera, mapData, input) {
     this.camera = camera;
@@ -97,14 +98,11 @@ export class PlayerController {
     this.velocity.z = curH.y;
 
     // gravity + jump
-    const inWater = this.map.zoneAt(this.position.x, this.position.z) === this.map.waterZone;
-    this.inWater = inWater;
-    const gravity = inWater ? GRAVITY * 0.35 : GRAVITY;
     if (this.onGround && input.jumpPressed && !this.crouching) {
-      this.velocity.y = inWater ? JUMP_SPEED * 0.6 : JUMP_SPEED;
+      this.velocity.y = JUMP_SPEED;
       this.onGround = false;
     }
-    this.velocity.y += gravity * dt;
+    this.velocity.y += GRAVITY * dt;
     if (this.velocity.y < -30) this.velocity.y = -30;
 
     this._moveWithCollision(dt);
@@ -154,14 +152,26 @@ export class PlayerController {
   }
 
   _moveWithCollision(dt) {
-    // Integrate X and Z separately against nearby wall segments (AABB-ish capsule vs oriented box),
-    // which gives smooth sliding along walls without complex penetration solving.
+    // Integrate X and Z separately against nearby wall segments (capsule vs oriented box),
+    // which gives clean sliding along walls: moving into a wall along one axis stops just that
+    // axis's velocity while the other axis (e.g. sliding sideways along the wall) is untouched.
+    //
+    // Each axis pass snaps the player directly to the wall's surface (rather than adding an
+    // incremental "push" on top of whatever the previous frame left behind), which is what
+    // makes standing at/waiting against a wall feel stable instead of shoved: with a push-based
+    // correction the player is nudged out by a small amount every single frame that motion
+    // + resolution disagree, which reads as a constant jitter/shove even while stationary.
     let px = this.position.x, pz = this.position.z;
     const dx = this.velocity.x * dt;
     const dz = this.velocity.z * dt;
 
-    px = this._resolveAxis(px, pz, dx, 0);
-    pz = this._resolveAxis(px, pz, 0, dz);
+    const rx = this._resolveAxis('x', px, pz, dx);
+    if (rx.hit) this.velocity.x = 0;
+    px = rx.value;
+
+    const rz = this._resolveAxis('z', px, pz, dz);
+    if (rz.hit) this.velocity.z = 0;
+    pz = rz.value;
 
     this.position.x = px;
     this.position.z = pz;
@@ -177,12 +187,22 @@ export class PlayerController {
     }
   }
 
-  _resolveAxis(px, pz, dx, dz) {
-    let nx = px + dx;
-    let nz = pz + dz;
+  // Resolves motion along a single named world axis ('x' or 'z') against every nearby wall
+  // segment, snapping the position to the exact wall surface on contact instead of accumulating
+  // an outward "push". Takes an explicit `axis` rather than inferring it from whether the delta
+  // is nonzero -- inferring from delta is unsound whenever velocity on that axis happens to be
+  // exactly 0 (e.g. player stationary, or moving purely along the other axis), which previously
+  // caused this function to silently return the *other* axis's coordinate and stomp the wrong
+  // component of the player's position every such frame (the actual cause of the "walking into
+  // a wall / waiting just pushes me" bug -- the corruption, not a real physics push).
+  _resolveAxis(axis, px, pz, delta) {
+    let nx = axis === 'x' ? px + delta : px;
+    let nz = axis === 'z' ? pz + delta : pz;
     const r = PLAYER_RADIUS;
     const segments = this.map.queryWallsNear(nx, nz, r + 1.5);
     const halfT = this.map.wallThickness / 2;
+    const EPS = 1e-4; // tiny buffer past the boundary so repeated frames don't re-trigger from fp noise
+    let hit = false;
 
     for (const seg of segments) {
       if (seg.orient === 0) {
@@ -190,20 +210,22 @@ export class PlayerController {
         const closestZ = THREE.MathUtils.clamp(nz, seg.z0, seg.z1);
         const distX = nx - seg.x;
         const withinZ = Math.abs(nz - closestZ) < r;
-        if (withinZ && Math.abs(distX) < (halfT + r)) {
-          const push = (halfT + r) - Math.abs(distX);
-          nx += Math.sign(distX || 1) * push;
+        if (withinZ && Math.abs(distX) < (halfT + r) && axis === 'x') {
+          const side = Math.sign(px - seg.x) || Math.sign(distX) || 1;
+          nx = seg.x + side * (halfT + r + EPS);
+          hit = true;
         }
       } else {
         const closestX = THREE.MathUtils.clamp(nx, seg.x0, seg.x1);
         const distZ = nz - seg.z;
         const withinX = Math.abs(nx - closestX) < r;
-        if (withinX && Math.abs(distZ) < (halfT + r)) {
-          const push = (halfT + r) - Math.abs(distZ);
-          nz += Math.sign(distZ || 1) * push;
+        if (withinX && Math.abs(distZ) < (halfT + r) && axis === 'z') {
+          const side = Math.sign(pz - seg.z) || Math.sign(distZ) || 1;
+          nz = seg.z + side * (halfT + r + EPS);
+          hit = true;
         }
       }
     }
-    return dx !== 0 ? nx : nz;
+    return { value: axis === 'x' ? nx : nz, hit };
   }
 }

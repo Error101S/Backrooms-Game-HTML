@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GeometryBatcher } from './GeometryBatcher.js';
 import {
-  createCarpetMaterial, createWallMaterial, createCeilingMaterial, createPoolMaterial, createWaterMaterial,
+  createCarpetMaterial, createWallMaterial, createCeilingMaterial, createPoolMaterial,
 } from './Materials.js';
 import { ZONE_WATER, ZONE_CONCRETE } from './MapData.js';
 import { hashSeed, mulberry32 } from '../utils/PRNG.js';
@@ -21,12 +21,10 @@ export class World {
     this.scene.add(this.group);
 
     this.collidersFlat = []; // AABB list for quick collision (in addition to spatial hash on mapData)
-    this.waterMeshes = [];
 
     this._buildFloorsAndCeilings();
     this._buildWalls();
     this._buildBaseboards();
-    this._buildWater();
 
     this.lightGrid = new LightGrid(scene, this.group, mapData, quality);
   }
@@ -49,20 +47,19 @@ export class World {
       const floorBatch = new GeometryBatcher();
       const ceilBatch = new GeometryBatcher();
       const ceilHeight = this.heightForZone(zone);
-      const isWater = zone === ZONE_WATER;
+      // Plain Backrooms: every zone (including the map's blue-coded area) gets a normal,
+      // dry floor at the same height -- no water/pool basin. The tiled zone still uses the
+      // pool_tiles PBR texture set purely as a flooring pattern (bathroom-style tile),
+      // just without any water surface or lowered basin.
+      const isTiled = zone === ZONE_WATER;
       for (const [x0, z0, x1, z1] of list) {
-        if (isWater) {
-          // pool tiled basin floor, sits slightly lower to read as a shallow pool
-          floorBatch.addHorizontalQuad(x0, z0, x1, z1, FLOOR_Y - 0.18, 1.0, true);
-        } else {
-          floorBatch.addHorizontalQuad(x0, z0, x1, z1, FLOOR_Y, 2.2, true);
-        }
+        floorBatch.addHorizontalQuad(x0, z0, x1, z1, FLOOR_Y, isTiled ? 1.0 : 2.2, true);
         ceilBatch.addHorizontalQuad(x0, z0, x1, z1, ceilHeight, 1.2, false);
         // record simple AABB collider info isn't needed for floor (walls only)
         this.collidersFlat.push({ x0, z0, x1, z1, zone });
       }
       if (!floorBatch.isEmpty()) {
-        const mat = isWater ? createPoolMaterial(6, 6) : createCarpetMaterial(zone, 6, 6);
+        const mat = isTiled ? createPoolMaterial(6, 6) : createCarpetMaterial(zone, 6, 6);
         const mesh = new THREE.Mesh(floorBatch.build(), mat);
         mesh.receiveShadow = true;
         mesh.name = 'Floor_zone' + zone;
@@ -122,21 +119,25 @@ export class World {
 
   _buildBaseboards() {
     // Thin dark trim strip along the base of every wall for grounding/detail, matching the
-    // reference footage's visible skirting boards.
+    // reference footage's visible skirting boards. Spans are extended by half-thickness at
+    // each end (same reasoning as GeometryBatcher.addWallBoxV/H) so the trim fully seals
+    // corners instead of leaving a gap where two walls meet.
     const batch = new GeometryBatcher();
     const H = 0.09;
     const vW = this.map.vWalls, hW = this.map.hWalls;
     for (let i = 0; i < vW.length; i += 4) {
       const x = vW[i], z0 = vW[i + 1], z1 = vW[i + 2];
       const half = this.map.wallThickness / 2 + 0.01;
-      batch.addVerticalQuadZ(x - half, Math.min(z0, z1), Math.max(z0, z1), 0, H, 4, -1);
-      batch.addVerticalQuadZ(x + half, Math.min(z0, z1), Math.max(z0, z1), 0, H, 4, 1);
+      const zmin = Math.min(z0, z1) - half, zmax = Math.max(z0, z1) + half;
+      batch.addVerticalQuadZ(x - half, zmin, zmax, 0, H, 4, -1);
+      batch.addVerticalQuadZ(x + half, zmin, zmax, 0, H, 4, 1);
     }
     for (let i = 0; i < hW.length; i += 4) {
       const z = hW[i], x0 = hW[i + 1], x1 = hW[i + 2];
       const half = this.map.wallThickness / 2 + 0.01;
-      batch.addVerticalQuadX(Math.min(x0, x1), Math.max(x0, x1), z - half, 0, H, 4, -1);
-      batch.addVerticalQuadX(Math.min(x0, x1), Math.max(x0, x1), z + half, 0, H, 4, 1);
+      const xmin = Math.min(x0, x1) - half, xmax = Math.max(x0, x1) + half;
+      batch.addVerticalQuadX(xmin, xmax, z - half, 0, H, 4, -1);
+      batch.addVerticalQuadX(xmin, xmax, z + half, 0, H, 4, 1);
     }
     if (!batch.isEmpty()) {
       const mat = new THREE.MeshStandardMaterial({ color: 0x4a4326, roughness: 0.85 });
@@ -146,26 +147,7 @@ export class World {
     }
   }
 
-  _buildWater() {
-    const rects = this.map.floorRects;
-    const batch = new GeometryBatcher();
-    for (let i = 0; i < rects.length; i += 5) {
-      if (rects[i + 4] !== ZONE_WATER) continue;
-      batch.addHorizontalQuad(rects[i], rects[i + 1], rects[i + 2], rects[i + 3], FLOOR_Y - 0.06, 1, true);
-    }
-    if (!batch.isEmpty()) {
-      const mesh = new THREE.Mesh(batch.build(), createWaterMaterial());
-      mesh.name = 'WaterSurface';
-      mesh.renderOrder = 2;
-      this.group.add(mesh);
-      this.waterMeshes.push(mesh);
-    }
-  }
-
   update(dt, elapsed, playerPos) {
-    for (const w of this.waterMeshes) {
-      w.position.y = Math.sin(elapsed * 0.6) * 0.01;
-    }
     this.lightGrid.update(dt, elapsed, playerPos);
   }
 }
