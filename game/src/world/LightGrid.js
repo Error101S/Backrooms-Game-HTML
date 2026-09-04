@@ -103,7 +103,17 @@ export class LightGrid {
     // leaving, jump position while it can't be seen, fade in at the new spot.
     this._poolState = [];
     for (let i = 0; i < poolSize; i++) {
-      const light = new THREE.PointLight(0xfff6df, 0, 6.5, 2.0);
+      // NOTE ON INTENSITY UNITS: three.js (this bundled build is r169) lights are physically
+      // photometric -- PointLight.intensity is candela and combines with inverse-square distance
+      // falloff (see getDistanceAttenuation in the lighting shader chunk), not the old pre-r155
+      // "legacy" arbitrary-unit lights. A PointLight with intensity ~0.5 (the previous value
+      // here) produces only a small fraction of a lux at a couple of meters -- far too dim for
+      // MeshStandardMaterial surfaces to visibly pick up, which is why these lights glowed at
+      // their own position (the emissive unlit panel mesh) but never actually lit the floor,
+      // walls, or ceiling around them despite `intensity > 0`. Values in the 8-18 range are
+      // what's actually needed for a physically-lit point source to read as "lighting the room"
+      // at the couple-of-meters range these ceiling fixtures sit above the player.
+      const light = new THREE.PointLight(0xfff6df, 0, 7.5, 1.75);
       light.castShadow = i < Math.min(6, poolSize); // only a handful cast shadows for perf
       if (light.castShadow) {
         light.shadow.mapSize.set(512, 512);
@@ -122,7 +132,7 @@ export class LightGrid {
     // point-light pool alone can't fake (you'd otherwise get a harsh, pitch-black floor the
     // instant you step past the pool's range); this stand-in for that bounce light is cheap
     // (no shadow map) and keeps nearby geometry readable without washing out the moody dimness.
-    this.fillLight = new THREE.PointLight(0xd9cfa8, 0.16, 5.5, 2.0);
+    this.fillLight = new THREE.PointLight(0xd9cfa8, 1.4, 5.5, 1.9);
     this.fillLight.castShadow = false;
     parentGroup.add(this.fillLight);
   }
@@ -211,7 +221,11 @@ export class LightGrid {
         // the active pool eases in/out rather than visibly ramping on a hard quadratic curve.
         const t = THREE.MathUtils.clamp(1 - d / this.range, 0, 1);
         const fade = t * t * (3 - 2 * t);
-        state.baseIntensity = 0.55 * fade + 0.05;
+        // Scaled up to match the photometric candela intensity now used by the pool's
+        // PointLights (see the constructor note above) -- this is what actually makes each
+        // fixture cast visible, falling-off light onto the floor/walls/ceiling around it
+        // instead of just producing an emissive dot with no real illumination.
+        state.baseIntensity = 11 * fade + 0.6;
 
         if (fixtureIdx !== state.fixtureIdx && fixtureIdx !== state.pendingFixtureIdx) {
           if (state.fixtureIdx === -1) {

@@ -11,18 +11,10 @@ function loadTex(path, { srgb = false } = {}) {
   if (cache.has(path)) return cache.get(path);
   const tex = loader.load(path);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 4;
+  tex.anisotropy = 8;
   if (srgb) tex.colorSpace = THREE.SRGBColorSpace;
   cache.set(path, tex);
   return tex;
-}
-
-function cloneRepeat(tex, rx, ry) {
-  const t = tex.clone();
-  t.needsUpdate = true;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(rx, ry);
-  return t;
 }
 
 const BASE = './assets/textures/';
@@ -46,13 +38,26 @@ export const TextureSets = {
     rough: BASE + 'ceiling_tiles_2/rough.jpg',
     metersPerTile: 1.2,
   },
+  // The real patterned wallcovering (subtle chevron/stripe motif) -- this is the texture the
+  // reference calls out as "wallpaper", distinct from the flat single-tone painted_wall sets
+  // below. This is now the *primary* wall material (previously this slot was wired to the
+  // painted_wall files by mistake, so every wall rendered as a flat painted color and the
+  // actual wallpaper/ texture files were never used anywhere in the game).
   wallpaper: {
+    color: BASE + 'wallpaper/color.jpg',
+    normal: BASE + 'wallpaper/normal.jpg',
+    rough: BASE + 'wallpaper/rough.jpg',
+    metersPerTile: 2.4,
+  },
+  // Flat painted-wall variants, used as the occasional alternate patch for variety (matching
+  // the reference's "different wall here" notes) -- no longer the default.
+  paintedWall: {
     color: BASE + 'painted_wall/color.jpg',
     normal: BASE + 'painted_wall/normal.jpg',
     rough: BASE + 'painted_wall/rough.jpg',
     metersPerTile: 2.4,
   },
-  wallpaper2: {
+  paintedWall2: {
     color: BASE + 'painted_wall_2/color.jpg',
     normal: BASE + 'painted_wall_2/normal.jpg',
     rough: BASE + 'painted_wall_2/rough.jpg',
@@ -66,6 +71,7 @@ export const TextureSets = {
   },
 };
 
+
 // Zone tints applied on top of the base wallpaper/carpet to echo the reference
 // blueprint's color-coded rooms (pink office, tiled area, green carpet room, gray concrete).
 // Zone 2 ("blue" on the map) renders as a plain dry tiled floor (pool_tiles texture, see
@@ -78,10 +84,20 @@ export const ZoneTints = {
   4: { carpet: 0xc9cdd3, wall: 0xd7dade },        // gray concrete area
 };
 
-function makeMaterial(set, { repeat, tint = 0xffffff, roughnessMul = 1, extra = {} } = {}) {
-  const color = cloneRepeat(loadTex(set.color, { srgb: true }), repeat.x, repeat.y);
-  const normal = cloneRepeat(loadTex(set.normal), repeat.x, repeat.y);
-  const rough = cloneRepeat(loadTex(set.rough), repeat.x, repeat.y);
+// IMPORTANT: geometry UVs are already baked directly in *tile units* by GeometryBatcher --
+// every call site in World.js passes a `tileSize` to addHorizontalQuad/addWallBoxV/H that
+// matches this exact texture set's `metersPerTile` (e.g. carpet uses metersPerTile 2.2 and
+// the floor batcher is built with tileSize 2.2), so a UV value of 1.0 already corresponds to
+// exactly one real tile. That means `texture.repeat` here must stay at its default (1,1) --
+// applying any extra multiplier on top (as a previous version did, scaling by an unrelated
+// "room width / metersPerTile" constant) double-tiles the pattern and makes it look wrong at
+// every room size (either smeared into a flat blur on large rooms or reduced to noise on
+// small ones), which is why the carpet/ceiling/wallpaper patterns read as "not showing up"
+// despite the image files themselves loading fine.
+function makeMaterial(set, { tint = 0xffffff, roughnessMul = 1, extra = {} } = {}) {
+  const color = loadTex(set.color, { srgb: true });
+  const normal = loadTex(set.normal);
+  const rough = loadTex(set.rough);
   return new THREE.MeshStandardMaterial({
     map: color,
     normalMap: normal,
@@ -93,28 +109,25 @@ function makeMaterial(set, { repeat, tint = 0xffffff, roughnessMul = 1, extra = 
   });
 }
 
-export function createCarpetMaterial(zone, width, depth) {
-  const set = TextureSets.carpet;
-  const repeat = new THREE.Vector2(Math.max(0.5, width / set.metersPerTile), Math.max(0.5, depth / set.metersPerTile));
+export function createCarpetMaterial(zone) {
   const tint = ZoneTints[zone] ? ZoneTints[zone].carpet : 0xffffff;
-  return makeMaterial(set, { repeat, tint, roughnessMul: 1 });
+  return makeMaterial(TextureSets.carpet, { tint, roughnessMul: 1 });
 }
 
-export function createWallMaterial(zone, length, height, alt = false) {
-  const set = alt ? TextureSets.wallpaper2 : TextureSets.wallpaper;
-  const repeat = new THREE.Vector2(Math.max(0.5, length / set.metersPerTile), Math.max(0.5, height / set.metersPerTile));
+export function createWallMaterial(zone, alt = false) {
+  // Primary wall covering is the real patterned "wallpaper" texture set (per the reference's
+  // fabric-look wallcovering); the flat painted_wall set is now only ever the occasional
+  // alternate-room variant for subtle visual variety, never the default.
+  const set = alt ? TextureSets.paintedWall2 : TextureSets.wallpaper;
   const tint = ZoneTints[zone] ? ZoneTints[zone].wall : 0xffffff;
-  return makeMaterial(set, { repeat, tint, roughnessMul: 0.95 });
+  return makeMaterial(set, { tint, roughnessMul: 0.95 });
 }
 
-export function createCeilingMaterial(width, depth, alt = false) {
+export function createCeilingMaterial(alt = false) {
   const set = alt ? TextureSets.ceiling2 : TextureSets.ceiling;
-  const repeat = new THREE.Vector2(Math.max(0.5, width / set.metersPerTile), Math.max(0.5, depth / set.metersPerTile));
-  return makeMaterial(set, { repeat, roughnessMul: 1 });
+  return makeMaterial(set, { roughnessMul: 1 });
 }
 
-export function createPoolMaterial(width, depth) {
-  const set = TextureSets.pool;
-  const repeat = new THREE.Vector2(Math.max(0.5, width / set.metersPerTile), Math.max(0.5, depth / set.metersPerTile));
-  return makeMaterial(set, { repeat, roughnessMul: 0.6, extra: { metalness: 0.05 } });
+export function createPoolMaterial() {
+  return makeMaterial(TextureSets.pool, { roughnessMul: 0.6, extra: { metalness: 0.05 } });
 }

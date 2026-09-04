@@ -11,6 +11,7 @@ const FRICTION = 14.0;
 const EYE_HEIGHT = 1.68;
 const CROUCH_EYE_HEIGHT = 1.05;
 const PLAYER_RADIUS = 0.32;
+const JUMP_KICK = 1.35; // small upward "push-off" pop fed into the same spring as landing dip
 
 // First-person controller: acceleration-based ground movement, gravity + jump,
 // capsule-vs-wall-segment collision resolved via the map's spatial hash, head bob,
@@ -43,10 +44,12 @@ export class PlayerController {
     this.prevYaw = this.yaw;
     this.turnTilt = 0;        // smoothed roll driven purely by look/turn angular velocity
     this.bobTilt = 0;         // smoothed roll driven by the walk cycle (separate from turnTilt)
-    this.landDip = 0;         // transient vertical dip on hard landings, decays like a damped spring
+    this.landDip = 0;         // transient vertical dip on jump push-off/hard landings/crouch toggle
     this.landDipVel = 0;
     this._wasOnGround = true;
     this._prevFallSpeed = 0;
+    this._airTime = 0;        // seconds spent airborne, drives the subtle in-air sway
+    this._prevCrouching = false;
 
     this._tmpVec = new THREE.Vector3();
   }
@@ -110,6 +113,10 @@ export class PlayerController {
     if (this.onGround && input.jumpPressed && !this.crouching) {
       this.velocity.y = JUMP_SPEED;
       this.onGround = false;
+      // Quick anticipatory dip on push-off (legs compressing to spring upward), same critically
+      // damped spring the landing impact uses below -- gives jumping a bit of weight/wind-up
+      // instead of the camera just instantaneously gaining upward velocity with no feedback.
+      this.landDipVel -= JUMP_KICK;
     }
     this.velocity.y += GRAVITY * dt;
     if (this.velocity.y < -30) this.velocity.y = -30;
@@ -120,11 +127,14 @@ export class PlayerController {
 
     // landing impact: a small critically-damped spring kicks downward on touchdown, sized by
     // how fast the player was falling, then eases back to neutral over a few frames -- reads as
-    // a soft "thud" instead of the camera silently snapping back to eye height.
+    // a soft "thud" instead of the camera silently snapping back to eye height. Also tracks
+    // in-air time so a longer fall (vs. a tiny hop) produces a proportionally heavier landing.
     if (!this._wasOnGround && this.onGround) {
       const impactSpeed = Math.max(0, -fallSpeedBeforeMove);
-      this.landDipVel -= Math.min(2.6, impactSpeed * 0.34);
+      this.landDipVel -= Math.min(3.4, impactSpeed * 0.4);
+      this._airTime = 0;
     }
+    if (!this.onGround) this._airTime = (this._airTime ?? 0) + dt;
     this._wasOnGround = this.onGround;
     {
       const springK = 210, springD = 19; // stiff + fairly damped: quick dip, quick recover, no wobble
@@ -133,15 +143,24 @@ export class PlayerController {
       this.landDip += this.landDipVel * dt;
     }
 
-    // eye height smoothing (crouch transitions)
+    // eye height smoothing (crouch transitions), plus a tiny extra downward pop the instant
+    // crouch is toggled so ducking reads as a deliberate motion rather than a smooth camera
+    // glide with no impulse behind it (mirrors the same spring used for jump/land).
     const targetEye = this.crouching ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
+    if (this.crouching !== this._prevCrouching) {
+      this.landDipVel -= this.crouching ? 0.55 : -0.35;
+    }
+    this._prevCrouching = this.crouching;
     this.eyeHeight += (targetEye - this.eyeHeight) * Math.min(1, dt * 10);
 
-    // head bob based on horizontal speed
+    // head bob based on horizontal speed. Crouched movement gets its own slower, shallower
+    // cadence (a low creeping shuffle instead of the same stride length as standing) --
+    // previously crouch-walking reused the exact same bob curve as standing/running, which
+    // looked wrong since a crouched stride is physically much shorter and slower.
     const speed = Math.hypot(this.velocity.x, this.velocity.z);
     this.currentSpeed = speed;
     if (this.onGround && speed > 0.15) {
-      const bobSpeed = wantRun ? 11.5 : 8.0;
+      const bobSpeed = this.crouching ? 5.2 : (wantRun ? 11.5 : 8.0);
       this.bobPhase += dt * bobSpeed * (speed / targetSpeed);
       this.bobAmount = THREE.MathUtils.lerp(this.bobAmount, 1, dt * 7);
     } else {
@@ -167,15 +186,24 @@ export class PlayerController {
     // the foot "lands", which reads far more like an actual footfall than a pure sine ever
     // does. Lateral sway runs at half the vertical frequency (one full left-right cycle per
     // two vertical bounces = one cycle per full stride, matching how a body actually sways
-    // between left and right footfalls) and picks up a little extra swing on a run.
-    const runSwing = wantRun ? 1.25 : 1.0;
+    // between left and right footfalls) and picks up a little extra swing on a run, while a
+    // crouched stride swings noticeably less (shorter, more careful steps).
+    const runSwing = wantRun ? 1.25 : (this.crouching ? 0.55 : 1.0);
+    const bobVertAmp = this.crouching ? 0.032 : 0.05;
     const bobYTarget = (Math.sin(this.bobPhase) * 0.82 + Math.sin(this.bobPhase * 2.0) * 0.22)
-      * 0.05 * this.bobAmount;
+      * bobVertAmp * this.bobAmount;
     const bobXTarget = Math.cos(this.bobPhase * 0.5) * 0.034 * this.bobAmount * runSwing;
+
+    // Subtle in-air sway: while airborne (jumping/falling) the walk-cycle bob is gone (bobAmount
+    // relaxes to 0 since onGround is false), which used to leave the camera perfectly rigid for
+    // the whole arc -- a dead, mechanical feel completely unlike the rest of the motion. A tiny
+    // slow drifting sway keyed off airtime fills that gap without reading as a "step".
+    const airSway = !this.onGround ? Math.sin(this._airTime * 3.2) * 0.012 : 0;
+
     // Smooth the bob offsets themselves (in addition to bobAmount's attack/release) so that
     // sudden changes in ground/speed state never produce a visible pop in camera position.
     this._bobY = THREE.MathUtils.lerp(this._bobY ?? 0, bobYTarget, Math.min(1, dt * 18));
-    this._bobX = THREE.MathUtils.lerp(this._bobX ?? 0, bobXTarget, Math.min(1, dt * 18));
+    this._bobX = THREE.MathUtils.lerp(this._bobX ?? 0, bobXTarget + airSway, Math.min(1, dt * 18));
 
     this.camera.position.set(
       this.position.x + this._bobX,

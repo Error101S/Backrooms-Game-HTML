@@ -59,7 +59,7 @@ export class World {
         this.collidersFlat.push({ x0, z0, x1, z1, zone });
       }
       if (!floorBatch.isEmpty()) {
-        const mat = isTiled ? createPoolMaterial(6, 6) : createCarpetMaterial(zone, 6, 6);
+        const mat = isTiled ? createPoolMaterial() : createCarpetMaterial(zone);
         const mesh = new THREE.Mesh(floorBatch.build(), mat);
         mesh.receiveShadow = true;
         mesh.name = 'Floor_zone' + zone;
@@ -67,7 +67,7 @@ export class World {
       }
       if (!ceilBatch.isEmpty()) {
         const alt = zone === ZONE_CONCRETE;
-        const mat = createCeilingMaterial(6, 6, alt);
+        const mat = createCeilingMaterial(alt);
         const mesh = new THREE.Mesh(ceilBatch.build(), mat);
         mesh.receiveShadow = false;
         mesh.name = 'Ceiling_zone' + zone;
@@ -108,7 +108,7 @@ export class World {
       if (batch.isEmpty()) continue;
       const [zoneStr, altStr] = key.split('_');
       const zone = Number(zoneStr), alt = altStr === '1';
-      const mat = createWallMaterial(Number(zone), 8, this.heightForZone(zone), alt);
+      const mat = createWallMaterial(Number(zone), alt);
       const mesh = new THREE.Mesh(batch.build(), mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
