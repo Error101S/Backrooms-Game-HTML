@@ -87,9 +87,21 @@ export class LightGrid {
       this.fixturePositions.push(new THREE.Vector3(x, y, z));
     }
 
+    // Map each fixture to its nearest ceiling panel so a real point light can be visually
+    // synced to the flicker state of the panel it sits under (see _panelFlickerMul below) --
+    // without this the emissive panel could be seen stuttering while the light illuminating
+    // the room from that same spot stayed rock-steady, an obvious disconnect.
+    this._fixtureNearestPanel = this._buildNearestPanelMap();
+
     const poolSize = QUALITY_POOL[this.quality] ?? QUALITY_POOL.medium;
     this.range = QUALITY_RANGE[this.quality] ?? QUALITY_RANGE.medium;
     this.pool = [];
+    // Per-slot crossfade state, parallel to `pool`. `fixtureIdx: -1` means "unassigned / dark".
+    // `pendingFixtureIdx` holds a queued reassignment that is applied only once the slot has
+    // faded to black at its *current* spot -- this is what turns the old hard "teleport the
+    // light + snap its intensity" pop into an invisible cut: fade out in the dark room it's
+    // leaving, jump position while it can't be seen, fade in at the new spot.
+    this._poolState = [];
     for (let i = 0; i < poolSize; i++) {
       const light = new THREE.PointLight(0xfff6df, 0, 6.5, 2.0);
       light.castShadow = i < Math.min(6, poolSize); // only a handful cast shadows for perf
@@ -101,8 +113,49 @@ export class LightGrid {
       }
       parentGroup.add(light);
       this.pool.push(light);
+      this._poolState.push({ fixtureIdx: -1, pendingFixtureIdx: -1, targetIntensity: 0, baseIntensity: 0 });
     }
     this._reassignCooldown = 0;
+
+    // Soft, shadowless fill light that always rides just above the player. Real fluorescent
+    // office ceilings bounce a fair bit of light back up off floors/nearby walls that a sparse
+    // point-light pool alone can't fake (you'd otherwise get a harsh, pitch-black floor the
+    // instant you step past the pool's range); this stand-in for that bounce light is cheap
+    // (no shadow map) and keeps nearby geometry readable without washing out the moody dimness.
+    this.fillLight = new THREE.PointLight(0xd9cfa8, 0.16, 5.5, 2.0);
+    this.fillLight.castShadow = false;
+    parentGroup.add(this.fillLight);
+  }
+
+  // For every fixture, find the closest light panel by squared distance. O(fixtures * panels)
+  // but this only ever runs once at level load (hundreds * a few thousand = well under a frame
+  // budget even on load).
+  _buildNearestPanelMap() {
+    const panels = this.map.lightPanels;
+    const panelCount = panels.length / 3;
+    const out = new Int32Array(this.fixturePositions.length).fill(-1);
+    for (let f = 0; f < this.fixturePositions.length; f++) {
+      const fx = this.fixturePositions[f].x, fz = this.fixturePositions[f].z;
+      let bestD = Infinity, bestI = -1;
+      for (let p = 0; p < panelCount; p++) {
+        const dx = panels[p * 3] - fx, dz = panels[p * 3 + 1] - fz;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) { bestD = d; bestI = p; }
+      }
+      out[f] = bestI;
+    }
+    return out;
+  }
+
+  // Returns a 0..1 brightness multiplier for the panel nearest a given fixture, using the exact
+  // same deterministic hash/tick the panel mesh itself animates with, so a point light and the
+  // emissive panel above it always flicker in lockstep rather than as two independent systems.
+  _panelFlickerMul(fixtureIdx, elapsed) {
+    const panelIdx = this._fixtureNearestPanel ? this._fixtureNearestPanel[fixtureIdx] : -1;
+    if (panelIdx < 0 || !this._flickerIndices || !this._flickerIndices.includes(panelIdx)) return 1;
+    const seed = hashSeed(panelIdx * 7 + 1, Math.floor(elapsed * 2.7));
+    const r = mulberry32(seed)();
+    return r > 0.12 ? 1 : 0.12 + r * 0.18;
   }
 
   update(dt, elapsed, playerPos) {
@@ -123,13 +176,17 @@ export class LightGrid {
       inst.instanceColor.needsUpdate = true;
     }
 
-    if (!playerPos || this.fixturePositions.length === 0) return;
+    if (!playerPos) return;
+    if (this.fillLight) this.fillLight.position.set(playerPos.x, playerPos.y + 1.1, playerPos.z);
+    if (this.fixturePositions.length === 0) return;
 
     this._reassignCooldown -= dt;
     if (this._reassignCooldown <= 0) {
-      this._reassignCooldown = 0.25; // re-home lights 4x/sec, plenty smooth, cheap
+      this._reassignCooldown = 0.25; // re-evaluate assignments 4x/sec, plenty smooth, cheap
       this._reassignPool(playerPos);
     }
+
+    this._updateCrossfade(dt, elapsed);
   }
 
   _reassignPool(playerPos) {
@@ -145,15 +202,56 @@ export class LightGrid {
     candidates.sort((a, b) => a[0] - b[0]);
 
     for (let i = 0; i < this.pool.length; i++) {
-      const light = this.pool[i];
+      const state = this._poolState[i];
       if (i < candidates.length) {
-        const fp = fixtures[candidates[i][1]];
-        light.position.copy(fp);
+        const fixtureIdx = candidates[i][1];
         const d = Math.sqrt(candidates[i][0]);
-        const fade = THREE.MathUtils.clamp(1 - d / this.range, 0, 1);
-        light.intensity = 0.55 * fade * fade + 0.05;
-      } else {
+        // smoothstep falloff instead of a plain square: keeps the fully-bright core a little
+        // wider and rolls off more gently right at the range edge, so a fixture entering/leaving
+        // the active pool eases in/out rather than visibly ramping on a hard quadratic curve.
+        const t = THREE.MathUtils.clamp(1 - d / this.range, 0, 1);
+        const fade = t * t * (3 - 2 * t);
+        state.baseIntensity = 0.55 * fade + 0.05;
+
+        if (fixtureIdx !== state.fixtureIdx && fixtureIdx !== state.pendingFixtureIdx) {
+          if (state.fixtureIdx === -1) {
+            // slot was already dark/unused -- safe to assign and jump straight there
+            state.fixtureIdx = fixtureIdx;
+            this.pool[i].position.copy(fixtures[fixtureIdx]);
+          } else {
+            // slot is lit somewhere else right now -- queue the move, fade out first (see
+            // _updateCrossfade), and only relocate once it's actually dark.
+            state.pendingFixtureIdx = fixtureIdx;
+          }
+        }
+      } else if (state.fixtureIdx !== -1 || state.pendingFixtureIdx !== -1) {
+        // fell out of range entirely: fade out in place, then go fully idle
+        state.pendingFixtureIdx = -2; // sentinel: "unassign, don't reassign"
+        state.baseIntensity = 0;
+      }
+    }
+  }
+
+  _updateCrossfade(dt, elapsed) {
+    const FADE_RATE = 9; // ~110ms time-constant fade, quick but not a pop
+    for (let i = 0; i < this.pool.length; i++) {
+      const light = this.pool[i];
+      const state = this._poolState[i];
+      const hasPending = state.pendingFixtureIdx !== -1;
+      const flickerMul = state.fixtureIdx >= 0 ? this._panelFlickerMul(state.fixtureIdx, elapsed) : 1;
+      state.targetIntensity = hasPending ? 0 : state.baseIntensity * flickerMul;
+
+      light.intensity = THREE.MathUtils.lerp(light.intensity, state.targetIntensity, Math.min(1, dt * FADE_RATE));
+
+      if (hasPending && light.intensity < 0.015) {
         light.intensity = 0;
+        if (state.pendingFixtureIdx === -2) {
+          state.fixtureIdx = -1;
+        } else {
+          state.fixtureIdx = state.pendingFixtureIdx;
+          light.position.copy(this.fixturePositions[state.fixtureIdx]);
+        }
+        state.pendingFixtureIdx = -1;
       }
     }
   }

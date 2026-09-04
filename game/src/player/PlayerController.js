@@ -39,6 +39,15 @@ export class PlayerController {
     this.footstepEvents = [];
     this.sensitivity = 1.0;
 
+    // -- camera feel state (head bob polish, turn roll, landing dip) --
+    this.prevYaw = this.yaw;
+    this.turnTilt = 0;        // smoothed roll driven purely by look/turn angular velocity
+    this.bobTilt = 0;         // smoothed roll driven by the walk cycle (separate from turnTilt)
+    this.landDip = 0;         // transient vertical dip on hard landings, decays like a damped spring
+    this.landDipVel = 0;
+    this._wasOnGround = true;
+    this._prevFallSpeed = 0;
+
     this._tmpVec = new THREE.Vector3();
   }
 
@@ -105,7 +114,24 @@ export class PlayerController {
     this.velocity.y += GRAVITY * dt;
     if (this.velocity.y < -30) this.velocity.y = -30;
 
+    // capture pre-resolution fall speed so a hard landing can drive an impact dip below
+    const fallSpeedBeforeMove = this.velocity.y;
     this._moveWithCollision(dt);
+
+    // landing impact: a small critically-damped spring kicks downward on touchdown, sized by
+    // how fast the player was falling, then eases back to neutral over a few frames -- reads as
+    // a soft "thud" instead of the camera silently snapping back to eye height.
+    if (!this._wasOnGround && this.onGround) {
+      const impactSpeed = Math.max(0, -fallSpeedBeforeMove);
+      this.landDipVel -= Math.min(2.6, impactSpeed * 0.34);
+    }
+    this._wasOnGround = this.onGround;
+    {
+      const springK = 210, springD = 19; // stiff + fairly damped: quick dip, quick recover, no wobble
+      const accel = -springK * this.landDip - springD * this.landDipVel;
+      this.landDipVel += accel * dt;
+      this.landDip += this.landDipVel * dt;
+    }
 
     // eye height smoothing (crouch transitions)
     const targetEye = this.crouching ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
@@ -117,9 +143,9 @@ export class PlayerController {
     if (this.onGround && speed > 0.15) {
       const bobSpeed = wantRun ? 11.5 : 8.0;
       this.bobPhase += dt * bobSpeed * (speed / targetSpeed);
-      this.bobAmount = THREE.MathUtils.lerp(this.bobAmount, 1, dt * 6);
+      this.bobAmount = THREE.MathUtils.lerp(this.bobAmount, 1, dt * 7);
     } else {
-      this.bobAmount = THREE.MathUtils.lerp(this.bobAmount, 0, dt * 6);
+      this.bobAmount = THREE.MathUtils.lerp(this.bobAmount, 0, dt * 5);
     }
 
     // footstep event timing
@@ -134,15 +160,55 @@ export class PlayerController {
       this.footstepAccum = Math.min(this.footstepAccum, 0.1);
     }
 
-    // apply to camera
-    const bobY = Math.sin(this.bobPhase) * 0.045 * this.bobAmount;
-    const bobX = Math.cos(this.bobPhase * 0.5) * 0.03 * this.bobAmount;
-    this.camera.position.set(this.position.x + bobX, this.position.y + this.eyeHeight + bobY, this.position.z);
+    // -- head bob: a two-harmonic Lissajous walk cycle instead of a single sine --
+    // The vertical bounce blends the fundamental with a soft second harmonic (a classic
+    // view-bob trick borrowed from Source/Quake-style FPS cameras): the extra sin(2*phase)
+    // term flattens the very top/bottom of the arc and adds a quicker double-tap right as
+    // the foot "lands", which reads far more like an actual footfall than a pure sine ever
+    // does. Lateral sway runs at half the vertical frequency (one full left-right cycle per
+    // two vertical bounces = one cycle per full stride, matching how a body actually sways
+    // between left and right footfalls) and picks up a little extra swing on a run.
+    const runSwing = wantRun ? 1.25 : 1.0;
+    const bobYTarget = (Math.sin(this.bobPhase) * 0.82 + Math.sin(this.bobPhase * 2.0) * 0.22)
+      * 0.05 * this.bobAmount;
+    const bobXTarget = Math.cos(this.bobPhase * 0.5) * 0.034 * this.bobAmount * runSwing;
+    // Smooth the bob offsets themselves (in addition to bobAmount's attack/release) so that
+    // sudden changes in ground/speed state never produce a visible pop in camera position.
+    this._bobY = THREE.MathUtils.lerp(this._bobY ?? 0, bobYTarget, Math.min(1, dt * 18));
+    this._bobX = THREE.MathUtils.lerp(this._bobX ?? 0, bobXTarget, Math.min(1, dt * 18));
+
+    this.camera.position.set(
+      this.position.x + this._bobX,
+      this.position.y + this.eyeHeight + this._bobY + this.landDip,
+      this.position.z
+    );
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
-    const tilt = Math.sin(this.bobPhase) * 0.008 * this.bobAmount * (wantRun ? 1.4 : 1);
-    this.camera.rotation.z = tilt;
+
+    // -- camera roll, two independent contributions --
+    // 1) bobTilt: the existing walk-cycle roll (subtle sway synced to footfalls), now smoothed
+    //    rather than assigned outright so it blends cleanly with turnTilt below.
+    const bobTiltTarget = Math.sin(this.bobPhase) * 0.0075 * this.bobAmount * (wantRun ? 1.4 : 1);
+    this.bobTilt = THREE.MathUtils.lerp(this.bobTilt, bobTiltTarget, Math.min(1, dt * 14));
+
+    // 2) turnTilt: a genuine "banking" roll driven purely by how fast the player is turning the
+    //    camera (mouse/stick look), independent of movement or footsteps -- turning quickly to
+    //    the right banks the camera slightly right, like leaning into a turn, then eases back to
+    //    level once the look input stops. Uses the wrap-safe shortest-angle delta between this
+    //    frame's yaw and last frame's so it behaves correctly across the +-PI wrap boundary.
+    let dyaw = this.yaw - this.prevYaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    const yawVel = dt > 1e-5 ? dyaw / dt : 0;
+    this.prevYaw = this.yaw;
+
+    const MAX_TURN_TILT = 0.055; // ~3.15 degrees max bank, enough to feel intentional, not seasick
+    const turnTiltTarget = THREE.MathUtils.clamp(-yawVel * 0.05, -MAX_TURN_TILT, MAX_TURN_TILT);
+    // snap into a turn quickly, ease back out of it more slowly for a natural bank-and-recover feel
+    const turnSmoothRate = Math.abs(turnTiltTarget) > Math.abs(this.turnTilt) ? 16 : 6;
+    this.turnTilt = THREE.MathUtils.lerp(this.turnTilt, turnTiltTarget, Math.min(1, dt * turnSmoothRate));
+
+    this.camera.rotation.z = this.bobTilt + this.turnTilt;
   }
 
   drainFootsteps() {
